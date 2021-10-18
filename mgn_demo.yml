@@ -1,0 +1,277 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Lab for demonstrating Application Migration Service
+
+Parameters: 
+  DataCenterCidr:
+    Type: String
+    Description: CIDR range for "data center"
+    Default: "172.0.0.0/24"
+  TargetVpcCidr:
+    Type: String
+    Description: CIDR range for target account VPC
+    Default: "10.0.0.0/24"
+  InternetCidr:
+    Type: String
+    Description: CIDR range for routing to internet
+    Default: "0.0.0.0/0"
+  Ec2AmiId:
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
+    Description: latest Amazon Linux2 AMI ID on which to launch the web server
+    Default: "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
+  Ec2InstanceType:
+    Type: String
+    Description: Instance type to deploy
+    Default: "t2.micro" # Free tier eligible
+  Ec2KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 Key Pair to enable SSH access to the instance
+  MgnUserAccessKeyId:
+    Type: String
+    Description: Access key ID for the MGN user created manually in the console.
+    NoEcho: True
+  MgnUserSecretAccessKey:
+    Type: String
+    Description: Secret access key for the MGN user created manually in the console.
+    NoEcho: True
+
+Resources:
+
+  ###################
+  ###################
+  # Data Center     #
+  ###################
+  ###################
+
+  DataCenterVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref DataCenterCidr
+      EnableDnsHostnames: True
+      EnableDnsSupport: True
+      Tags:
+        - Key: Name
+          Value: DataCenterVpc
+
+  # DataCenterVpc subnet
+  DataCenterVpcSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+          Ref: 'AWS::Region'
+      CidrBlock: !GetAtt DataCenterVpc.CidrBlock
+      Tags:
+        - Key: Name
+          Value: DataCenterVpc-subnet
+      VpcId: !Ref DataCenterVpc
+
+  # DataCenterVpc internet gateway + NAT
+  DataCenterVpcIgw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: DataCenterVpc-igw
+
+  DataCenterVpcIgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: 
+      InternetGatewayId: !Ref DataCenterVpcIgw
+      VpcId: !Ref DataCenterVpc
+
+  # DataCenterVpc subnet routing
+  DataCenterVpcRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      Tags:
+        - Key: Name
+          Value: DataCenterVpc-routetable
+      VpcId: !Ref DataCenterVpc
+
+  DataCenterSubnetToRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: 
+      RouteTableId: !Ref DataCenterVpcRouteTable
+      SubnetId: !Ref DataCenterVpcSubnet
+
+  # internet routes
+  DataCenterVpcPublicRoute:
+    Type: AWS::EC2::Route
+    Properties: 
+      DestinationCidrBlock: !Ref InternetCidr
+      RouteTableId: !Ref DataCenterVpcRouteTable
+      GatewayId: !Ref DataCenterVpcIgw
+
+  SsmEc2Role:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  Ec2InstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - !Ref SsmEc2Role
+  
+  DataCenterEc2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP and SSH access to instances
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref DataCenterVpc
+  
+  # EC2 instance with simple static webpage served by Apache
+  DataCenterWebServerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref Ec2AmiId
+      InstanceType: !Ref Ec2InstanceType
+      IamInstanceProfile: !Ref Ec2InstanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: True
+          DeviceIndex: "0"
+          SubnetId: !Ref DataCenterVpcSubnet
+          GroupSet:
+            - !Ref DataCenterEc2SecurityGroup
+      KeyName: !Ref Ec2KeyPairName
+      UserData:
+        'Fn::Base64': !Sub |
+          #!/bin/bash
+          sudo yum install -y httpd
+          sudo systemctl start httpd
+          sudo systemctl enable httpd
+          sudo wget -O ./aws-replication-installer-init.py https://aws-application-migration-service-${AWS::Region}.s3.amazonaws.com/latest/linux/aws-replication-installer-init.py 
+          sudo python3 aws-replication-installer-init.py \
+               --region ${AWS::Region} \
+               --aws-access-key-id ${MgnUserAccessKeyId} \
+               --aws-secret-access-key ${MgnUserSecretAccessKey} \
+               --no-prompt \
+               --force-volumes \
+               --devices /dev/xvda
+
+
+  ################
+  ################
+  # AWS          #
+  ################
+  ################
+
+  TargetVpc:
+    Type: AWS::EC2::VPC
+    Properties: 
+      CidrBlock: !Ref TargetVpcCidr
+      EnableDnsHostnames: True
+      EnableDnsSupport: True
+      Tags:
+        - Key: Name
+          Value: TargetVpc
+
+  # Target VPC subnet
+  TargetVpcSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+          Ref: 'AWS::Region'
+      CidrBlock: !GetAtt TargetVpc.CidrBlock
+      Tags:
+        - Key: Name
+          Value: TargetVpc-subnet
+      VpcId: !Ref TargetVpc
+
+  # Target VPC internet gateway + NAT
+  TargetVpcInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: TargetVpc-igw
+
+  # Target VPC internet gateway attachment
+  TargetVpcInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: 
+      InternetGatewayId: !Ref TargetVpcInternetGateway
+      VpcId: !Ref TargetVpc
+
+  # Target VPC NAT gateway elastic IP
+  TargetVpcNatGatewayElasticIp:
+    Type: AWS::EC2::EIP
+    Properties: 
+      Tags: 
+        - Key: Name
+          Value: TargetVpc-natgweip
+
+  # Target VPC NAT gateway
+  TargetVpcNatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties: 
+      AllocationId: !GetAtt TargetVpcNatGatewayElasticIp.AllocationId
+      SubnetId: !Ref TargetVpcSubnet
+      Tags:
+        - Key: Name
+          Value: TargetVpc-natgw
+
+  # Target VPC subnet routing
+  TargetVpcPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      Tags:
+        - Key: Name
+          Value: TargetVpc-pubroutetable
+      VpcId: !Ref TargetVpc
+
+  # Target VPC route table association
+  TargetVpcSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: 
+      RouteTableId: !Ref TargetVpcPublicRouteTable
+      SubnetId: !Ref TargetVpcSubnet
+
+  # Target VPC internet route
+  TargetVpcNatPublicRoute:
+    Type: AWS::EC2::Route
+    Properties: 
+      DestinationCidrBlock: !Ref InternetCidr
+      RouteTableId: !Ref TargetVpcPublicRouteTable
+      GatewayId: !Ref TargetVpcInternetGateway
+  
+  # EC2 security group for new instance to use in target account
+  TargetEc2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP and SSH access to instances
+      VpcId: !Ref TargetVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+Outputs:
+  DataCenterWebsiteURL:
+    Description: URL for data center web server
+    Value: !Join 
+      - ''
+      - - 'http://'
+        - !GetAtt 
+          - DataCenterWebServerInstance
+          - PublicDnsName
