@@ -8,11 +8,11 @@ While this template does deploy an instance (our source server) to AWS, it is al
 ## The Guide
 1. Ensure you have an AWS account to deploy into. Configure your terminal so you can run AWS CLI commands in this account.
 2. Create an EC2 key pair (`RSA` and `.pem`) in the console with the name `mgn_demo`. If you use a different name, pass this as the `Ec2KeyPairName` parameter in step 6.
-   > While we do not intend to SSH to the instance in this guide, it can be useful to have SSH access for debugging purposes. System Manager is configured to gain access to the EC2 terminal using Session Manager.
+   > While we do not intend to SSH to the instance in this guide, it can be useful to have SSH access for debugging purposes. System Manager is also configured to gain access to the EC2 terminal using Session Manager.
 3. Set up a user for the MGN agent. Follow this guide and get your access key ID and secret access key: https://docs.aws.amazon.com/mgn/latest/ug/credentials.html
 4. Pass in key ID and secret access key values using the supplied  `MgnUserAccessKeyId` and `MgnUserSecretAccessKey` parameters in step 6.
 5. Configure the Application Migration Service in the console:
-   * **Staging area subnet:** Select the VPC and Subnet prefixed 'TargetVpc*' in your account.
+   * **Staging area subnet:** Select the VPC and Subnet prefixed `TargetVpc*` in your account.
    * Leave all other settings as default values
 6. Deploy the stack:
    ```bash
@@ -41,7 +41,7 @@ While this template does deploy an instance (our source server) to AWS, it is al
    * **Advanced details:** No changes
 9.  Set the launch template's default version to be the new version you just created (creating a new version of a launch template does _not_ automatically set that new version to be the default version; you need to do this manually after creating the new version).
 10.  Back in the MGN console, you should see the launch template for your source server automatically update to show the new instance type, security group and subnet. Choose `Test and Cutover` > `Launch test instances` > `Launch` to create a new test instance. This step can take a while (10-20 minutes). You can click on the "job" to view the job log as the instance launches.
-11. You will eventually see the test instance has been launched. Head to http://<new instance IP address> and check that you can see the Apache welcome page. This shows that the server has successfully replicated.
+11. You will eventually see the test instance has been launched. Head to `http://<new instance IP address>` and check that you can see the Apache welcome page. This shows that the server has successfully replicated.
 12. On the source server page in the MGN console, head to `Test and Cutover` > `Mark as "Ready for cutover"`. Leave the checkbox checked (to terminate the test instance) and press `Continue` to mark the instance as `Ready for cutover`.
 13. You may need to modify the launch template again at this point. Change the version back to the version that you created earlier, where the instance type was `t2.micro`.
 14. When you are ready to complete the cutover, click on `Test and Cutover` > `Launch cutover instances` > `Launch`.
